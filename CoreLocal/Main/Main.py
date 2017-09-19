@@ -1,6 +1,12 @@
-from Parser import FileReader
+from Parser.FileReader import *
+import time
 
-# def verificaAzStg():
+while 1:
+    if verifyShare() == True:
+        do()
+    else:
+        time.sleep(300)
 
-FileReader.do()
+
+
 
