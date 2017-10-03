@@ -1,46 +1,101 @@
 import csv
 import pyodbc
 from azure.storage.file import FileService
-from io  import StringIO
+from io import StringIO
+import time
+import os
+import json
 
-def fileService():
-    file_service = FileService(account_name="jonesabinostorage",account_key="QvgR5kwDrFN4OYkWp+s3S9QAaSDhky9RuUPMMw0QgfdZEnx7LG9WfiByFhHO+aNYaWKiMp31G86Ltz5fvDNJKA==")
-    return file_service
+file_service = FileService(account_name="storageprojetoestagio", account_key="7UsnLUlgJEExfzgjk/V7ijVXwzrF20D72lRaoT45MqUsRjDJwDtZl1Y5TAXtFQyl2F7bODljRRNCMJpCj6qGiw==")
 
-def dbConnection():
+def getnames():
+    share_name = ''
+    file_name = ''
+    for i in file_service.list_shares():
+        share_name = i.name
+    for i in file_service.list_directories_and_files(share_name):
+        file_name = i.name
+    return share_name, file_name
+
+share_name = getnames()[0]
+file_name = getnames()[1]
+
+
+def verifyshare():
+    print('\nGetting informations\n')
+    print('File Service - Share Name: ' + share_name)
+    if file_name == '':
+        print('\nThere are no files to download, finishing module')
+        return False
+    else:
+    #elif file_service.exists(share_name, '', file_name):
+        print('\nFile found: ' + file_name + '\nPreparing to read...')
+        return True
+
+
+
+def dbconnection():
     conn = pyodbc.connect('Driver={ODBC Driver 13 for SQL Server};'
-                          'Server=tcp:dbteste-server.database.windows.net,1433;'
-                          'Database=MetricasTeste;Uid=dbteste@dbteste-server;'
-                          'Pwd=inmetrics123#;'
+                          'Server=tcp:srv-projeto-estagio.database.windows.net,1433;'
+                          'Database=db-projeto-estagio;'
+                          'Uid=projeto-estagio@srv-projeto-estagio;'
+                          'Pwd=inmetrics@123;'
                           'Encrypt=yes;'
                           'TrustServerCertificate=no;'
                           'Connection Timeout=30;')
     return conn
 
-#Estou verificando se há uma maneira de pegar o azure o share_name e file_name para não deixar essas info fixas no código
-def parseFile(fileService):
+
+def readfile():
+    print('\nReading file content...')
+    azurestorage_text = file_service.get_file_to_text(share_name, '', file_name).content
+    return azurestorage_text
+
+
+def parsefile(readfile):
     dados = []
-    file_service = fileService()
-    azurestorage_text = file_service.get_file_to_text('teste', '', 'Retorno.csv').content
+    azurestorage_text = readfile
+    print('\nPreparing data to be stored...')
 
     with StringIO(azurestorage_text) as file_obj:
         reader = csv.reader(file_obj, delimiter=';')
         header = next(reader)
         for line in reader:
-            dados.append(line)
+            if line != []:
+                dados.append(line)
     return dados
 
-def dbInsertion(dbConnection):
-    conn = dbConnection()
+
+def dbinsertion(dbconnection):
+    dados = parsefile(readfile())
+    print('\nConnecting to Azure SQL...')
+    conn = dbconnection
     cursor = conn.cursor()
-
-    #Existe o método executemany(),mas por trás ela faz vários inserts também, e em testes de desempenho ela se mostrou mais lenta. Estão atualizando o método mas ainda não está  100% pronto
+    print('\nWriting data...')
     for line in range(dados.__len__()):
-        cursor.execute('INSERT INTO CPU_metrics (data_,servidor,metrica,max_mb,avg_mb,p90_mb) VALUES (?,?,?,?,?,?)', (dados[line]))
-
+        cursor.execute("INSERT INTO metricas(data_, servidor, metrica, max_mb, avg_mb, p90_mb) VALUES (?,?,?,?,?,?)",
+                       (dados[line]))
     conn.commit()
     conn.close()
 
+
+def delazfile():
+    print('\nDeleting file from Azure Storage')
+    file_service.delete_file(share_name, '', file_name)
+    print('\n File "'+ file_name +'" has been deleted successfully')
+    print('\nA new verification will start in 5 minutes\n')
+
+
 def main():
-    parseFile(fileService())
-    dbInsertion(dbConnection())
+    dbinsertion(dbconnection())
+    delazfile()
+
+
+if __name__ == '__main__':
+    print('\nAccessing Azure Storage')
+    time.sleep(2)
+    if verifyshare():
+        main()
+    else:
+        print('A new verification will start in 5 minutes\n')
+
