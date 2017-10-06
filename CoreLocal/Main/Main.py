@@ -1,5 +1,6 @@
 import csv
 import pyodbc
+import datetime
 from azure.storage.file import FileService
 from io import StringIO
 import time
@@ -7,10 +8,9 @@ import os
 import json
 
 file_service = FileService(account_name="storageprojetoestagio",account_key="7UsnLUlgJEExfzgjk/V7ijVXwzrF20D72lRaoT45MqUsRjDJwDtZl1Y5TAXtFQyl2F7bODljRRNCMJpCj6qGiw==")
-
 ########################################################################################################################
-def CreateCursor(CONNECTION_STRING):
-    return pyodbc.connect(CONNECTION_STRING).cursor()
+# def CreateCursor(CONNECTION_STRING):
+#     return pyodbc.connect(CONNECTION_STRING).cursor()
 
 def encapsulate(value):
     # Encapsulate the input for SQL use (add ' etc)
@@ -131,30 +131,50 @@ def writetoDB(datalist, table_name, fieldsnames, cursor):
 
 
 def getNames():
+    file_name = []
     share_name = ''
     for i in file_service.list_shares():
         share_name = i.name
-    return share_name
+    for i in file_service.list_directories_and_files(share_name):
+        file_name.append(i.name)
+    return share_name, file_name
 
 # share_obj = StringIO(getNames())
 # share_name = next(share_obj)
-share_name = getNames()
 # print(share_name)
 
+def verifyFiles():
+    share_name, file_names = getNames()
+    for file_name in file_names:
+        print('\nGetting informations from Azure Storage')
+        print('File Service Share Name: ' + share_name)
+        if file_name == 'resultado_CPU.csv':
+            print('\nFile found. Name:',file_name, '\nPreparing to read')
+            azurestorage_text = parseFile(readFile(share_name,file_name))
+            dbInsertion(azurestorage_text)
+        elif file_name == 'resultado_disco.csv':
+            print('\nFile found. Name:', file_name, '\nPreparing to read')
+            parseFile(readFile(share_name, file_name))
+        elif file_name == 'resultado_rede.csv':
+            print('\nFile found. Name:', file_name, '\nPreparing to read')
+            parseFile(readFile(share_name, file_name))
+        elif file_name == 'resultado_memoria.csv':
+            print('\nFile found. Name:', file_name, '\nPreparing to read')
+            parseFile(readFile(share_name, file_name))
+        else:
+            print('\nFile not found, finishing module')
 
-def verifyShare():
-    print('\nGetting informations from Azure Storage')
-    print('File Service Share Name: ' + share_name)
-    if file_service.exists(share_name, '', 'retorno.csv'):
-        print('\nFile found. Preparing to read')
-        return True
-    else:
-        print('\nFile not found, finishing module')
-        return False
-
-connstr = 'Driver={ODBC Driver 13 for SQL Server};Server=tcp:srv-projeto-estagio.database.windows.net,1433;Database=db-projeto-estagio;Uid=projeto-estagio@srv-projeto-estagio;Pwd=inmetrics@123;Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30;'
-def dbConnection():
+# connstr = 'Driver={ODBC Driver 13 for SQL Server};' \
+#           'Server=tcp:srv-projeto-estagio.database.windows.net,1433;' \
+#           'Database=db-projeto-estagio;' \
+#           'Uid=projeto-estagio@srv-projeto-estagio;' \
+#           'Pwd=inmetrics@123;' \
+#           'Encrypt=yes;' \
+#           'TrustServerCertificate=no;' \
+#           'Connection Timeout=30;'
+def dbCursor():
     print('\nConnecting to the database...')
+    start = time.clock()
     conn = pyodbc.connect('Driver={ODBC Driver 13 for SQL Server};'
                           'Server=tcp:srv-projeto-estagio.database.windows.net,1433;'
                           'Database=db-projeto-estagio;'
@@ -163,18 +183,31 @@ def dbConnection():
                           'Encrypt=yes;'
                           'TrustServerCertificate=no;'
                           'Connection Timeout=30;')
-    return conn
+    end = time.clock()
+    sec = end - start
+    m, s = divmod(sec, 60)
+    h, m = divmod(m, 60)
+    print('DB connection time: %d:%02d:%02d' % (h, m, s))
+    return conn.cursor()
 
 
-def readFile():
+def readFile(share_name,file_name):
     print('\nReading file...')
-    azurestorage_text = file_service.get_file_to_text(share_name, '', 'retorno.csv').content
+    start = time.clock()
+    azurestorage_text = file_service.get_file_to_text(share_name, '', file_name).content
+    end = time.clock()
+    times = end - start
+    m, s = divmod(times, 60)
+    h, m= divmod(m, 60)
+    print('File read in: %d:%02d:%02d' % (h, m ,s))
+
     return azurestorage_text
 
-
+rc = 0
 def parseFile(readFile):
+    global rc
     dados = []
-    azurestorage_text = readFile
+    azurestorage_text = readFile()
     print('\nParsing file...')
 
     with StringIO(azurestorage_text) as file_obj:
@@ -184,42 +217,46 @@ def parseFile(readFile):
         for line in reader:
             if line != []:
                 dados.append(line)
+                rc += 1
+    print('\n{:,} rows to write on Azure SQL'.format(rc))
     return dados
 
 
-def dbInsertion():
+def dbInsertion(azurestorage_text):
     # cursor = conn.cursor()
-    cursor = CreateCursor(connstr)
-    dados = parseFile(readFile())
-    print('\nSending data to Azure SQL...')
+    cursor = dbCursor()
+    dados = azurestorage_text
+    print('\nWriting data to SQL Azure...')
     start = time.clock()
     # for line in range(dados.__len__()):
     for line in enlist(dados):
-        #print(line)
-        cursor.execute("INSERT INTO metricas(data_, servidor, metrica, max_mb, avg_mb, p90_mb) VALUES " + line)
+        cursor.execute("INSERT INTO cpu_metrics(data_, servidor, metrica, max_mb, avg_mb, p90_mb) VALUES " + line)
     cursor.commit()
     end = time.clock()
     cursor.close()
     sec = end - start
     m, s = divmod(sec, 60)
     h, m = divmod(m, 60)
-    print("%d:%02d:%02d" % (h, m, s))
+    print('Writing time: %d:%02d:%02d' % (h, m, s))
 
 
-def delAzFile():
+
+def delAzFile(share_name):
     print('\nDeleting file from Azure Storage')
     file_service.delete_file(share_name, '', 'retorno.csv')
 
-def main():
-    dbInsertion()
-    delAzFile()
+# def main():
+#     dbInsertion()
+    # delAzFile(getNames())
 
 
 if __name__ == '__main__':
     print('Starting process...\n')
     print('Connecting to Azure Storage')
     time.sleep(1)
-    if verifyShare():
-        main()
-    else:
-        print('A new verification will start in 5 minutes')
+    # getNames()
+    # if verifyShare():
+        # main()
+        # pass
+    # else:
+    #     print('A new verification will start in 5 minutes')
